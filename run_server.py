@@ -1,6 +1,7 @@
 import logging
 import os
 import socket
+import subprocess
 
 from dotenv import load_dotenv
 
@@ -23,11 +24,11 @@ def main():
     server_socket.listen()
     logging.info('Socket is listening.')
 
-    response_generator = server.generate_response()
-
-    while True:
-        server.run(response_generator, server_socket)
+    server.run(server_socket)
 
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        subprocess.run(['npx', 'kill-port', PORT])
