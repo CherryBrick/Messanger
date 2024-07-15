@@ -1,6 +1,6 @@
+import asyncio
 import logging
 import os
-import socket
 import subprocess
 
 from dotenv import load_dotenv
@@ -14,21 +14,17 @@ HOST = os.getenv('HOST')
 PORT = os.getenv('PORT')
 
 
-def main():
-    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    logging.info(f'Socket {server_socket} created.')
-    server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    logging.info('Socket is set up.')
-    server_socket.bind((HOST, int(PORT)))
+async def main():
+    server_socket = await asyncio.start_server(
+        lambda reader, writer: server.run(server.generate_response(),
+                                          reader, writer),
+        HOST, int(PORT))
     logging.info(f'Socket is bound to {HOST}:{PORT}.')
-    server_socket.listen()
-    logging.info('Socket is listening.')
-
-    server.run(server_socket)
-
+    async with server_socket:
+        await server_socket.serve_forever()
 
 if __name__ == '__main__':
     try:
-        main()
+        asyncio.run(main())
     except KeyboardInterrupt:
         subprocess.run(['npx', 'kill-port', PORT])

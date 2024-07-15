@@ -1,10 +1,9 @@
+import asyncio
 import logging
 import os
-import time
 
 from functools import wraps
 from dotenv import load_dotenv
-from select import select
 
 load_dotenv()
 
@@ -76,58 +75,45 @@ def generate_response():
                     yield f'Response generating error: {e}\n'.encode()
 
 
-def accept_connection(server_socket):
-    client_socket, addr = server_socket.accept()
-    logging.info(f'Client {addr} set up connection.')
-    to_monitor.append(client_socket)
-    logging.info(f'Client {addr} registered to monitor.')
+async def send_message(response_generator, request, writer):
+    try:
+        decoded_request = request.decode()
+        logging.info(f'Decoded request is {decoded_request}')
+        if decoded_request in ('quit', 'quit\n'):
+            raise asyncio.CancelledError
+        generated_response = response_generator.send(
+            decoded_request)
+        logging.info('Response generated.')
+        writer.write(generated_response)
+        await writer.drain()
+        logging.info('Response sent to client.')
+    except Exception as e:
+        writer.write(f'Server-side error {e}'.encode())
+        logging.error(f'{e}')
+        await writer.drain()
+    finally:
+        response_generator.send(None)
 
 
-def send_message(client_socket, response_generator):
-    request = client_socket.recv(1024)
-    time.sleep(5)
-    if len(request) == 0:
-        logging.info('Connection closed by client.')
-        client_socket.close()
-        to_monitor.remove(client_socket)
-        logging.info('Waiting for request.')
-    elif request:
-        try:
-            logging.info('Client sent request.')
-            decoded_request = request.decode()
-            logging.info(f'Decoded request is {decoded_request}')
-            if decoded_request in ('quit\n', 'quit'):
-                to_monitor.remove(client_socket)
-                client_socket.sendall('Connection closed'.encode())
-                client_socket.close()
-                logging.info('Connection closed.')
-                next(response_generator)
-            else:
-                generated_response = response_generator.send(
-                    decoded_request)
-                logging.info('Response generated.')
-                client_socket.sendall(generated_response)
-                logging.info('Response sent to client.')
-        except Exception as e:
-            client_socket.sendall(f'Server-side error: {e}'.encode())
-            logging.error(f'{e}')
-            to_monitor.remove(client_socket)
-            client_socket.sendall('Connection closed'.encode())
-            client_socket.close()
-            logging.info('Connection closed.')
-        finally:
-            next(response_generator)
-    else:
-        logging.error('Empty request.')
-
-
-def run(server_socket):
-    to_monitor.append(server_socket)
-    response_generator = generate_response()
+async def run(response_generator, reader, writer):
+    addr = writer.get_extra_info('peername')
+    logging.info(f'Accepted connection from {addr}')
     while True:
-        ready_to_read, _, _ = select(to_monitor, [], [])
-        for sock in ready_to_read:
-            if sock is server_socket:
-                accept_connection(sock)
+        try:
+            request = await reader.read(1024)
+            if len(request) == 0:
+                writer.close()
+                await writer.wait_closed()
+                logging.info('Connection closed.')
+                break
+            if request:
+                logging.info('Client sent request.')
+                await send_message(response_generator, request, writer)
             else:
-                send_message(sock, response_generator)
+                logging.error('Empty request.')
+                logging.info('Waiting for request.')
+        except asyncio.CancelledError:
+            writer.close()
+            await writer.wait_closed()
+            logging.info('Connection closed.')
+            break
