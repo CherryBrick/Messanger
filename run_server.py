@@ -16,8 +16,7 @@ PORT = os.getenv('PORT')
 
 async def main():
     server_socket = await asyncio.start_server(
-        lambda reader, writer: server.run(server.generate_response(),
-                                          reader, writer),
+        lambda reader, writer: server.run(reader, writer),
         HOST, int(PORT))
     logging.info(f'Socket is bound to {HOST}:{PORT}.')
     async with server_socket:
