@@ -164,3 +164,5 @@ cython_debug/
 # Local data
 chat_logs/
 data/
+Pipfile
+Pipfile.lock

@@ -1,17 +1,18 @@
 import asyncio
 import logging
 import os
+import struct
 
-# from functools import wraps
 from dotenv import load_dotenv
+from socket import error as SocketError
 
-import messages_manager as mm
+import sessions
+from urls import urls
 
 load_dotenv()
 
 HOST = os.getenv('HOST')
 PORT = os.getenv('PORT')
-CHAT_LOG_DIR = os.getenv('CHAT_LOG_DIR')
 
 logging.basicConfig(level=logging.INFO,
                     format='%(asctime)s - %(levelname)s - %(message)s')
@@ -19,16 +20,7 @@ logging.basicConfig(level=logging.INFO,
 to_monitor = []
 
 
-# def generator_init(func):
-#     @wraps(func)
-#     def wrapper(*args, **kwargs):
-#         gen = func(*args, **kwargs)
-#         gen.send(None)
-#         return gen
-#     return wrapper
-
-
-async def parsing_request(request):
+def parsing_request(request):
     if not request:
         logging.error('No request for parsing.')
         return ''
@@ -37,83 +29,104 @@ async def parsing_request(request):
     return parsed_request
 
 
-# def method_allowed(parsed_request):
-#     if not parsed_request:
-#         return False
-#     if parsed_request[0] != 'GET':
-#         logging.error(f'Method {parsed_request[0]} not allowed.')
-#         return False
-#     logging.info('Method GET allowed.')
-#     return True
-
-
-# @generator_init
-# def generate_response():
-#     responses = ['Один запрос', 'Второй запрос', 'Третий запрос']
-#     logging.info('Response generator initialized.')
-#     while True:
-#         for response in responses:
-#             while True:
-#                 try:
-#                     logging.info('Waiting for request.\n')
-#                     parsed_request = yield
-#                     if len(parsed_request) < 2:
-#                         logging.error('Request must contain \'<METHOD>'
-#                                       ' <MESSAGE>.\'')
-#                         yield b'Request must contain \'<METHOD> <MESSAGE>.\'\n'
-#                         continue
-#                     if not method_allowed(parsed_request):
-#                         yield b'Method not allowed.\n'
-#                         continue
-#                     client_response = response + ' ' + ' '.join(
-#                         word for word in parsed_request[1:]) + '\n'
-#                     logging.info(f'Response is {client_response}')
-#                     encoded_response = client_response.encode()
-#                     logging.info('Response is encoded.')
-#                     yield encoded_response
-#                     break
-#                 except Exception as e:
-#                     logging.error(f'{e}')
-#                     yield f'Response generating error: {e}\n'.encode()
+async def method_allowed(parsed_request, writer):
+    if not parsed_request:
+        response = 'First element has to be HTTP Method.'
+        logging.error(response)
+        await send_message(str(response), writer)
+        return False
+    if parsed_request[0] not in ('GET', 'POST'):
+        response = f'Method {parsed_request[0]} not allowed.'
+        logging.error(response)
+        await send_message(str(response), writer)
+        return False
+    logging.info('Method allowed.')
+    return True
 
 
 async def send_message(message, writer):
     try:
-        writer.write(writer)
+        header = struct.pack('!I', len(message))
+        writer.write(header)
+        writer.write(message.encode())
         await writer.drain()
-        logging.info('Message sent to clients.')
+        logging.info('Message sent to client.')
     except Exception as e:
         writer.write(f'Server-side error {e}'.encode())
         logging.error(f'{e}')
         await writer.drain()
 
 
+async def send_all(message):
+    try:
+        for client in sessions.connected_clients:
+            await send_message(message, client)
+    except Exception as e:
+        logging.error(f'{e}')
+
+
 async def run(reader, writer):
-    # chat_log_file = os.path.join(CHAT_LOG_DIR, 'public.csv')
-    # TODO: sent latest 20 messages on connection
+    async def close_session(writer, e, addr):
+        writer.close()
+        await writer.wait_closed()
+        logging.error(f'{e}')
+        user_id = sessions.sessions.pop([addr])['user_id']
+        sessions.sessions[user_id] = {'connected': False}
+
     addr = writer.get_extra_info('peername')
     logging.info(f'Accepted connection from {addr}')
+    sessions.connected_clients.append(writer)
+
     while True:
         try:
             request = await reader.read(1024)
+
             if len(request) == 0:
+                sessions.connected_clients.remove(writer)
                 writer.close()
                 await writer.wait_closed()
-                logging.info('Connection closed.')
+                logging.info(f'Connection closed from addr {addr}.')
+                try:
+                    user_id = sessions.sessions.pop(str(addr))['user_id']
+                    sessions.sessions[user_id] = {'connected': False}
+                except Exception as e:
+                    logging.error(f'{e}')
+                    logging.info('Waiting for request.')
                 break
-            if request:
-                logging.info('Client sent request.')
-                decoded_request = request.decode()
-                logging.info(f'Decoded request is {decoded_request}')
-                parsed_request = await parsing_request(decoded_request)
-                if parsed_request != '':
-                    message = ' '.join(word for word in parsed_request)
-                    await mm.save_message_to_csv(message)
-            else:
-                logging.error('Empty request.')
+
+            logging.info('Client sent request.')
+            decoded_request = request.decode()
+            logging.info(f'Decoded request is {decoded_request}')
+
+            try:
+                parsed_request = parsing_request(decoded_request)
+            except Exception as e:
+                logging.error(f"Error parsing request: {e}")
                 logging.info('Waiting for request.')
-        except asyncio.CancelledError:
-            writer.close()
-            await writer.wait_closed()
-            logging.info('Connection closed.')
+                continue
+
+            if not parsed_request or not await method_allowed(parsed_request,
+                                                              writer):
+                logging.info('Waiting for request.')
+                continue
+
+            if not parsed_request[1] in urls:
+                await send_message('Invalid command.', writer)
+                logging.info('Waiting for request.')
+                continue
+
+            response = await urls[parsed_request[1]](parsed_request, str(addr))
+            await send_message(response, writer)
+
+            if sessions.messages_to_send:
+                # time.sleep(6)
+                await send_all(
+                    str(sessions.messages_to_send.pop(0)))
+
+        except (asyncio.CancelledError, SocketError,
+                ConnectionResetError) as e:
+            await close_session(writer, e, addr)
             break
+        except Exception as e:
+            logging.error(f'{e}')
+            logging.info('Waiting for request.')

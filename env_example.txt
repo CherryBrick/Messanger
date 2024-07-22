@@ -1,0 +1,4 @@
+HOST = '': str
+PORT = 5000: int
+DB_PORT = 5432: int
+CHAT_LOG_DIR = '': str

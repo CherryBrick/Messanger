@@ -7,7 +7,6 @@ from dotenv import load_dotenv
 
 import server
 
-
 load_dotenv()
 
 HOST = os.getenv('HOST')
