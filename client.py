@@ -92,7 +92,6 @@ class ClientApp(App):
         try:
             if not to_monitor or not (self.client_socket in to_monitor):
                 self.client_socket = socket_register()
-                self.update_log(f'Sockets to monitor: {to_monitor}')
             self.client_socket.sendall(request.encode())
             self.update_log(f'Sent: {request}')
         except Exception as e:
@@ -151,7 +150,6 @@ def event_loop(app: ClientApp):
                 else:
                     response_message = response.decode()
                     app.update_log('Responce decoded.')
-                    app.update_log(f'{response_message}')
                     response_dict = json.loads(response_message)
                     app.update_log('json parsed.')
                     if event_connect.isSet():
