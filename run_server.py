@@ -4,8 +4,7 @@ import os
 import subprocess
 
 from dotenv import load_dotenv
-
-import server
+from multiprocessing import freeze_support
 
 load_dotenv()
 
@@ -21,7 +20,10 @@ async def main():
     async with server_socket:
         await server_socket.serve_forever()
 
+
 if __name__ == '__main__':
+    freeze_support()
+    import server
     try:
         asyncio.run(main())
     except KeyboardInterrupt:

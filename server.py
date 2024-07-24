@@ -1,7 +1,9 @@
 import asyncio
+import json
 import logging
 import os
 import struct
+import threading
 
 from dotenv import load_dotenv
 from socket import error as SocketError
@@ -17,6 +19,7 @@ PORT = os.getenv('PORT')
 logging.basicConfig(level=logging.INFO,
                     format='%(asctime)s - %(levelname)s - %(message)s')
 
+lock = threading.Lock()
 to_monitor = []
 
 
@@ -46,9 +49,13 @@ async def method_allowed(parsed_request, writer):
 
 async def send_message(message, writer):
     try:
+        message = message.encode()
+        logging.info('Message encoded.')
         header = struct.pack('!I', len(message))
+        logging.info(f'Message byte len is {len(message)}')
         writer.write(header)
-        writer.write(message.encode())
+        logging.info('Header sent')
+        writer.write(message)
         await writer.drain()
         logging.info('Message sent to client.')
     except Exception as e:
@@ -111,17 +118,19 @@ async def run(reader, writer):
                 continue
 
             if not parsed_request[1] in urls:
-                await send_message('Invalid command.', writer)
+                bad_response = json.dumps({'status': 'Invalid command.'})
+                await send_message(bad_response, writer)
                 logging.info('Waiting for request.')
                 continue
 
             response = await urls[parsed_request[1]](parsed_request, str(addr))
-            await send_message(response, writer)
+            if response:
+                await send_message(response, writer)
 
             if sessions.messages_to_send:
                 # time.sleep(6)
-                await send_all(
-                    str(sessions.messages_to_send.pop(0)))
+                with lock:
+                    await send_all(str(sessions.messages_to_send.pop(0)))
 
         except (asyncio.CancelledError, SocketError,
                 ConnectionResetError) as e:
@@ -130,3 +139,7 @@ async def run(reader, writer):
         except Exception as e:
             logging.error(f'{e}')
             logging.info('Waiting for request.')
+
+
+if __name__ == '__main__':
+    pass
